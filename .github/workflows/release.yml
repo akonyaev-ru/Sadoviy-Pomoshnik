@@ -74,7 +74,9 @@ jobs:
         shell: pwsh
         # Имя без версии: версия живёт в теге релиза, дублировать её в имени
         # файла незачем. Латиницей — кириллицу с пробелом GitHub коверкает.
-        run: Copy-Item "dist/Садовый помощник.exe" "dist/Sadovyy-pomoshnik.exe"
+        # Имя — как у репозитория (2026-10-02, владелец: «Sadoviy Pomoshnik»);
+        # до того файл назывался Sadovyy-pomoshnik.exe.
+        run: Copy-Item "dist/Садовый помощник.exe" "dist/Sadoviy-Pomoshnik.exe"
 
       - name: Опубликовать
         shell: pwsh
@@ -86,6 +88,6 @@ jobs:
         # делаем так же.
         run: >
           gh release create "${{ github.ref_name }}"
-          "dist/Sadovyy-pomoshnik.exe"
+          "dist/Sadoviy-Pomoshnik.exe"
           --title "${{ github.ref_name }}"
           --notes ""

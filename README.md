@@ -9,13 +9,13 @@ Wurzelimperium, upjers). Ставит внутрь игры несколько �
 
 ## Скачать
 
-Готовый файл — на [странице выпусков][relizy]. Скачайте `Sadovyy-pomoshnik.exe`
+Готовый файл — на [странице выпусков][relizy]. Скачайте `Sadoviy-Pomoshnik.exe`
 и запустите двойным щелчком; устанавливать ничего не нужно.
 
 Нужно, чтобы стояло приложение [upjers Home][upjers]: игрок заходит в игру
 через него.
 
-[relizy]: https://github.com/akonyaev-ru/sadovyy-pomoshnik/releases/latest
+[relizy]: https://github.com/akonyaev-ru/Sadoviy-Pomoshnik/releases/latest
 [upjers]: https://ru.upjers.com/upjers-home-games-download
 
 ## Откуда это пошло
