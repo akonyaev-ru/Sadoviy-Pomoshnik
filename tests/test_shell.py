@@ -949,3 +949,320 @@ def test_confirm_quit_dialog_leaves_an_unknown_dialog_alone():
         assert proc.poll() is None, "диалог закрылся сам — проверка ничего не доказала"
     finally:
         proc.kill()
+
+
+# ── вопросы приложения и его самообновление (2026-11-01) ─────────────
+#
+# Две открытые задачи с живых прогонов. 2026-09-19: при нехватке памяти
+# приложение спросило своим окном «всё равно стартовать игру?», игра стояла,
+# а помощник через минуту советовал «войдите как обычно» — не про то.
+# Самообновление: приложение вышло, поставило новую версию и поднялось само
+# с `--updated` — без отладочного порта; помощник попрощался «Закрыто. До
+# встречи.», хотя игра была на экране, и спасал только второй запуск.
+
+na_windows = pytest.mark.skipif(sys.platform != "win32", reason="окна и замки Windows")
+
+# Точных слов окна у нас нет — узнаём его по «памяти», а не по фразе целиком.
+VOPROS_PAMYATI = chr(10).join(
+    ["upjers Home", "Свободной памяти мало.", "Всё равно стартовать игру?", "Да", "Нет"])
+
+
+def _vopros(monkeypatch, text, okna=(777,)):
+    """Приложение с одним окном-вопросом; возвращает, какие окна читали."""
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: [4242])
+    monkeypatch.setattr(app.browser, "app_dialogs",
+                        lambda pids: list(okna) if pids == [4242] else [])
+    prochli = []
+    monkeypatch.setattr(app.browser, "dialog_text", lambda hwnd: prochli.append(hwnd) or text)
+    return prochli
+
+
+class _Proc:
+    """Процесс приложения: живёт `zhit` кругов главного цикла, потом выходит."""
+
+    def __init__(self, zhit: int):
+        self.zhit = zhit
+
+    def poll(self):
+        if self.zhit > 0:
+            self.zhit -= 1
+            return None
+        return 0
+
+    def terminate(self):
+        return None
+
+
+def _chasy(monkeypatch, t0: float = 1000.0) -> dict:
+    """Часы, которые идут только во сне: `sleep(s)` сдвигает `monotonic` на s."""
+    now = {"t": t0}
+    monkeypatch.setattr(app.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(app.time, "sleep", lambda s: now.__setitem__("t", now["t"] + s))
+    return now
+
+
+def test_memory_question_is_explained_in_words(monkeypatch):
+    """Окно «всё равно стартовать игру?» — объясняем словами сразу и один раз."""
+    okna = _okna(monkeypatch)
+    prochli = _vopros(monkeypatch, VOPROS_PAMYATI)
+    now = _chasy(monkeypatch)
+    states = {"a": "страница без игры: ru.upjers.com"}
+    voprosy: dict = {}
+
+    assert app._voprosy_prilozheniya(voprosy, states) is True
+    assert [o[0] for o in okna] == ["note"], okna
+    assert "памяти" in okna[0][1] and "«Да»" in okna[0][1], okna[0][1]
+
+    now["t"] += app.VOPROS_SHAG_S + 1
+    assert app._voprosy_prilozheniya(voprosy, states) is False, "то же окно — второй раз не говорим"
+    assert len(okna) == 1 and prochli == [777], (okna, prochli)
+
+
+def test_unknown_app_question_gets_a_general_hint(monkeypatch):
+    """Вопрос не про память — не выдумываем причину, просим ответить в окне."""
+    okna = _okna(monkeypatch)
+    _vopros(monkeypatch, chr(10).join(["upjers Home", "Продолжить?", "Да", "Нет"]))
+    _chasy(monkeypatch)
+    assert app._voprosy_prilozheniya({}, {"a": "страница без игры: ru.upjers.com"}) is True
+    assert [o[0] for o in okna] == ["note"], okna
+    assert "памяти" not in okna[0][1] and "Ответьте" in okna[0][1], okna[0][1]
+
+
+def test_no_question_hunting_once_the_game_is_open(monkeypatch):
+    """Игра открыта — окна приложения не ищем и игрока не тревожим."""
+    okna = _okna(monkeypatch)
+    monkeypatch.setattr(app.browser, "upjers_running",
+                        lambda: (_ for _ in ()).throw(AssertionError("игра открыта — окна не ищем")))
+    _chasy(monkeypatch)
+    assert app._voprosy_prilozheniya({}, {"a": "в саду; гномов 4"}) is False
+    assert okna == []
+
+
+def test_question_watch_does_not_spawn_tasklist_every_few_seconds(monkeypatch):
+    """Окна смотрим часто, а список процессов спрашиваем редко.
+
+    Приложение может весь день висеть в трее без открытой игры, и `tasklist`
+    раз в 3 с — это десятки тысяч процессов в сутки. Окно-вопрос живёт у
+    главного процесса, номер которого за жизнь приложения не меняется.
+    """
+    _okna(monkeypatch)
+    _vopros(monkeypatch, VOPROS_PAMYATI, okna=())
+    spisok = []
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: spisok.append(1) or [4242])
+    smotreli = []
+    monkeypatch.setattr(app.browser, "app_dialogs", lambda pids: smotreli.append(list(pids)) or [])
+    now = _chasy(monkeypatch)
+    voprosy: dict = {}
+    states = {"a": "страница без игры: ru.upjers.com"}
+    for _ in range(60):
+        app._voprosy_prilozheniya(voprosy, states)
+        now["t"] += 1.0
+    assert len(smotreli) >= 15, f"окна смотрели слишком редко: {len(smotreli)} раз за минуту"
+    assert set(map(tuple, smotreli)) == {(4242,)}, smotreli
+    assert len(spisok) <= 2, f"tasklist за минуту — {len(spisok)} раз"
+
+def test_memory_question_replaces_the_login_reminder(monkeypatch, tmp_path):
+    """Главный цикл: вопрос о памяти объяснён — «войдите как обычно» не нужно.
+
+    Ровно это и было 2026-09-19: на экране вопрос приложения, а помощник
+    через минуту советует войти в игру.
+    """
+    okna = _okna(monkeypatch)
+    _vopros(monkeypatch, VOPROS_PAMYATI)
+    _chasy(monkeypatch)
+    monkeypatch.setattr(app, "_sync_tabs",
+                        lambda port, tabs, source, printed, opened, straight, states:
+                        states.__setitem__("a", "страница без игры: ru.upjers.com"))
+    zhit = int(app.VHOD_ZHDAT_S) + 10
+    assert app._vesti(_Proc(zhit), 9333, "", tmp_path / "upjers Home.exe", True) is False
+    assert [o[0] for o in okna] == ["note"], okna
+    assert "памяти" in okna[0][1], okna[0][1]
+
+
+def test_dialog_text_is_read_through_ui_automation(monkeypatch):
+    """Текст вопроса — через UI Automation: `GetWindowText` у DirectUI пуст."""
+    skripty = []
+
+    def fake_ps(script, timeout=25.0):
+        skripty.append(script)
+        return chr(0xFEFF) + "upjers Home\r\nВсё равно стартовать игру?\r\nДа\r\nДа\r\n\r\nНет\r\n"
+
+    monkeypatch.setattr(browser, "_powershell", fake_ps)
+    assert browser.dialog_text(123456) == chr(10).join(
+        ["upjers Home", "Всё равно стартовать игру?", "Да", "Нет"])
+    assert "UIAutomationClient" in skripty[0] and "123456" in skripty[0], skripty[0]
+    assert "UTF8" in skripty[0], "без UTF-8 русский текст придёт знаками вопроса"
+
+
+def test_command_lines_of_the_app_come_from_powershell(monkeypatch):
+    """Командные строки приложения — построчно, без пустых и без окна."""
+    skripty = []
+
+    def fake_ps(script, timeout=25.0):
+        skripty.append(script)
+        return ('"C:\\Users\\Игрок\\upjers Home.exe" --updated\r\n\r\n'
+                '  "C:\\Users\\Игрок\\upjers Home.exe" --type=gpu-process  \r\n')
+
+    monkeypatch.setattr(browser, "_powershell", fake_ps)
+    assert browser.upjers_command_lines() == [
+        '"C:\\Users\\Игрок\\upjers Home.exe" --updated',
+        '"C:\\Users\\Игрок\\upjers Home.exe" --type=gpu-process',
+    ]
+    assert browser.UPJERS_PROCESS in skripty[0] and "CommandLine" in skripty[0], skripty[0]
+    assert "UTF8" in skripty[0], "путь с русским именем папки придёт знаками вопроса"
+
+
+def test_return_after_an_update_is_recognised_by_its_flag(monkeypatch):
+    """Поднялось само с `--updated` — это возврат после обновления.
+
+    Командную строку спрашиваем только при новых номерах процессов: это
+    PowerShell, а остатки закрытого приложения (`--type=…`) — не возврат.
+    """
+    _chasy(monkeypatch)
+    spiski = iter([[4242, 4243], [4243], [], [], [5100], [5100, 5101]])
+    seychas = {"pids": []}
+
+    def running():
+        seychas["pids"] = next(spiski, [5100, 5101])
+        return seychas["pids"]
+
+    sprosili = []
+
+    def command_lines():
+        sprosili.append(list(seychas["pids"]))
+        if 5100 in seychas["pids"]:
+            return ['"C:\\upjers Home.exe" --updated']
+        return ['"C:\\upjers Home.exe" --type=renderer']
+
+    monkeypatch.setattr(app.browser, "upjers_running", running)
+    monkeypatch.setattr(app.browser, "upjers_command_lines", command_lines)
+    assert app._vernulos_posle_obnovleniya() is True
+    assert sprosili == [[4242, 4243], [5100]], sprosili
+
+
+def test_app_closed_by_the_player_is_not_a_return(monkeypatch):
+    """Остатки закрытого приложения и тишина — не возврат: ждём срок и выходим."""
+    now = _chasy(monkeypatch)
+    spiski = iter([[4242, 4243], [4243]])
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: next(spiski, []))
+    monkeypatch.setattr(app.browser, "upjers_command_lines",
+                        lambda: ['"C:\\upjers Home.exe" --type=gpu-process'])
+    t0 = now["t"]
+    assert app._vernulos_posle_obnovleniya() is False
+    assert now["t"] - t0 >= app.VOZVRAT_ZHDAT_S
+
+
+def _run_app(monkeypatch, tmp_path, procs):
+    """run() с приложением: на каждый запуск выдаётся следующий процесс из `procs`."""
+    okna = _run_auto(monkeypatch)
+    exe = tmp_path / "upjers Home.exe"
+    exe.write_bytes(b"x")
+    zapuski = []
+
+    def launch_app(path, port=None):
+        zapuski.append(path)
+        return procs[len(zapuski) - 1], 9333 + len(zapuski)
+
+    monkeypatch.setattr(app.browser, "find_upjers", lambda report=None: exe)
+    monkeypatch.setattr(app.browser, "launch_app", launch_app)
+    monkeypatch.setattr(app.cdp, "wait_for_port", lambda port, timeout=60: [])
+    monkeypatch.setattr(app, "_sync_tabs", lambda *a: None)
+    monkeypatch.setattr(app, "_voprosy_prilozheniya", lambda voprosy, states: False)
+    monkeypatch.setattr(app, "_napomnit_vhod", lambda states, nachalo, uzhe: True)
+    monkeypatch.setattr(app, "release_single_run", lambda: True)
+    monkeypatch.setattr(app, "take_single_run", lambda name="": True)
+    _chasy(monkeypatch)
+    return okna, zapuski, exe
+
+
+def test_app_that_updated_itself_is_reopened_and_the_helper_stays(monkeypatch, tmp_path):
+    """Обновилось и поднялось без порта — закрываем штатно, открываем с портом, ведём дальше.
+
+    Замок одного запуска на время ожидания отпускаем: иначе игрок, щёлкнув
+    по значку в эти секунды, услышал бы «помощник завис, перезагрузите
+    компьютер».
+    """
+    okna, zapuski, exe = _run_app(monkeypatch, tmp_path, [_Proc(3), _Proc(2)])
+    vozvraty = iter([True, False])
+    monkeypatch.setattr(app, "_vernulos_posle_obnovleniya", lambda *a, **k: next(vozvraty))
+    zhivo = iter([[], [5100]])          # при старте приложения нет; после обновления — есть
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: next(zhivo, []))
+    monkeypatch.setattr(app.browser, "debug_port_of", lambda pids: None)
+    zakryli = []
+    monkeypatch.setattr(app.browser, "quit_upjers",
+                        lambda path, timeout=15.0: zakryli.append(path) or True)
+    zamok = []
+    monkeypatch.setattr(app, "release_single_run", lambda: zamok.append("отпустил") or True)
+    monkeypatch.setattr(app, "take_single_run", lambda name="": zamok.append("взял") or True)
+
+    assert app.run("https://ru.upjers.com/my-games", "panel", target="auto") == 0
+    assert zapuski == [exe, exe], "после обновления приложение не открыли заново"
+    assert zakryli == [exe], "поднявшееся без порта надо закрыть штатно"
+    assert zamok == ["отпустил", "взял", "отпустил"], zamok
+    assert okna == [], okna
+
+
+def test_closed_app_ends_the_helper_without_reopening(monkeypatch, tmp_path):
+    """Игрок закрыл приложение — помощник уходит и ничего не открывает."""
+    okna, zapuski, exe = _run_app(monkeypatch, tmp_path, [_Proc(2)])
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: [])
+    monkeypatch.setattr(app, "_vernulos_posle_obnovleniya", lambda *a, **k: False)
+    monkeypatch.setattr(app.browser, "quit_upjers",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("закрывать нечего")))
+    assert app.run("https://ru.upjers.com/my-games", "panel", target="auto") == 0
+    assert zapuski == [exe]
+    assert okna == [], okna
+
+
+def test_reopening_is_left_to_the_helper_that_took_the_lock(monkeypatch, tmp_path):
+    """Пока ждали, игрок запустил помощника снова — открывает он, а этот уходит."""
+    okna, zapuski, exe = _run_app(monkeypatch, tmp_path, [_Proc(2)])
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: [])
+    monkeypatch.setattr(app, "_vernulos_posle_obnovleniya", lambda *a, **k: True)
+    monkeypatch.setattr(app, "take_single_run", lambda name="": False)
+    assert app.run("https://ru.upjers.com/my-games", "panel", target="auto") == 0
+    assert zapuski == [exe], "второй помощник уже ведёт игру — открывать ещё раз нельзя"
+
+
+def test_reopening_after_updates_has_a_limit(monkeypatch, tmp_path):
+    """Приложение поднимается снова и снова — после нескольких раз сдаёмся, а не крутимся."""
+    procs = [_Proc(1) for _ in range(app.PEREZAPUSKI_MAX + 5)]
+    okna, zapuski, exe = _run_app(monkeypatch, tmp_path, procs)
+    monkeypatch.setattr(app.browser, "upjers_running", lambda: [])
+    monkeypatch.setattr(app, "_vernulos_posle_obnovleniya", lambda *a, **k: True)
+    assert app.run("https://ru.upjers.com/my-games", "panel", target="auto") == 0
+    assert len(zapuski) == 1 + app.PEREZAPUSKI_MAX, len(zapuski)
+
+
+@na_windows
+def test_single_run_lock_can_be_released_and_taken_again():
+    """Отпущенный замок берётся снова; отпускать дважды нечего."""
+    import uuid
+
+    imya = "SadovyPomoshnik-proverka-" + uuid.uuid4().hex[:8]
+    assert app.take_single_run(imya) is True
+    assert app.release_single_run() is True
+    assert app.take_single_run(imya) is True, "после отпуска замок не взялся снова"
+    assert app.release_single_run() is True
+    assert app.release_single_run() is False, "отпускать уже нечего"
+
+
+@s_oknami
+@na_windows
+def test_app_question_is_found_and_read_in_a_real_dialog():
+    """Настоящее окно-вопрос: находим его у процесса и читаем сам вопрос."""
+    proc = _dialog_child("Да", "Нет", "Свободной памяти мало. Всё равно стартовать игру?")
+    try:
+        okna: list[int] = []
+        for _ in range(30):
+            time.sleep(0.3)
+            okna = browser.app_dialogs([proc.pid])
+            if okna:
+                break
+        assert okna, "окно-вопрос у процесса не нашлось"
+        text = browser.dialog_text(okna[0])
+        assert "стартовать игру" in text, f"вопрос не прочитался: {text!r}"
+        assert "Нет" in text, f"подписей кнопок нет: {text!r}"
+        assert browser.app_dialogs([os.getpid()]) == [], "чужие окна — не вопросы приложения"
+    finally:
+        proc.kill()

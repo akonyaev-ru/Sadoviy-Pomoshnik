@@ -611,6 +611,90 @@ def confirm_quit_dialog(pids: list[int]) -> bool:
     return False
 
 
+def app_dialogs(pids: list[int]) -> list[int]:
+    """Видимые окна-вопросы приложения — диалоги Windows (класс `#32770`).
+
+    Приложение спрашивает игрока своими окнами: «Действительно закрыть»,
+    «всё равно стартовать игру?» при нехватке памяти (2026-09-19). Пока такое
+    окно открыто, игра не грузится, и сказать об этом игроку можем только мы.
+    """
+    if not pids or os.name != "nt":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return []
+    nashi = set(pids)
+    found: list[int] = []
+    try:
+        u32 = ctypes.WinDLL("user32", use_last_error=True)
+        callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def _top(hwnd, _lparam):
+            pid = wintypes.DWORD()
+            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in nashi and u32.IsWindowVisible(hwnd):
+                buf = ctypes.create_unicode_buffer(64)
+                u32.GetClassNameW(hwnd, buf, 64)
+                if buf.value == "#32770":
+                    found.append(hwnd)
+            return True
+
+        u32.EnumWindows(callback(_top), 0)
+    except Exception:
+        return []
+    return found
+
+
+def _stroki(out: str) -> list[str]:
+    """Непустые строки вывода PowerShell, без повторов и без метки BOM."""
+    vse: list[str] = []
+    for line in out.replace("﻿", "").splitlines():
+        line = line.strip()
+        if line and line not in vse:
+            vse.append(line)
+    return vse
+
+
+def dialog_text(hwnd: int) -> str:
+    """Текст окна-вопроса строками: заголовок, сам вопрос, подписи кнопок.
+
+    Вопрос в таких окнах рисует DirectUI, а не обычный элемент Windows, и
+    `GetWindowText` его не видит (проверено на окне нехватки памяти
+    2026-09-19). Читаем через UI Automation — так же, как экранный диктор.
+    Не прочиталось — пустая строка: окно-вопрос от этого вопросом быть не
+    перестаёт.
+    """
+    out = _powershell(
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; "
+        f"$e = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]{int(hwnd)}); "
+        "$e.FindAll([Windows.Automation.TreeScope]::Subtree, "
+        "[Windows.Automation.Condition]::TrueCondition) "
+        "| ForEach-Object { $_.Current.Name }"
+    )
+    return "\n".join(_stroki(out))
+
+
+def upjers_command_lines() -> list[str]:
+    """Командные строки запущенных процессов приложения.
+
+    Нужны ради одного признака — `--updated`: с ним приложение поднимает
+    себя само после обновления (замечено 2026-09-18; так запускают
+    приложение установщики electron-builder). `tasklist` командной строки
+    не показывает, а по номерам процессов новый запуск от остатков старого
+    не отличить.
+    """
+    out = _powershell(
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "Get-CimInstance Win32_Process "
+        f"| Where-Object {{ $_.Name -eq '{UPJERS_PROCESS}' }} "
+        "| ForEach-Object { $_.CommandLine }"
+    )
+    return [line.strip() for line in out.replace("﻿", "").splitlines() if line.strip()]
+
+
 def close_upjers(timeout: float = 12.0) -> int:
     """Закрывает приложение upjers Home и ждёт, пока оно действительно уйдёт.
 

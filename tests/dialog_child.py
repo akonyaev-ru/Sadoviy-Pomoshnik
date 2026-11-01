@@ -2,8 +2,10 @@
 
 Настоящий диалог Windows (класс `#32770`, как у приложения upjers Home после
 обновления 2026-09-18) с двумя кнопками. Подписи берутся из аргументов —
-по умолчанию те же, что у приложения: «Отменить» и «Закрыть». Печатает
-номер нажатой кнопки: 101 — первая, 102 — вторая.
+по умолчанию те же, что у приложения: «Отменить» и «Закрыть». Третий
+аргумент — текст вопроса: так подделывается и окно «всё равно стартовать
+игру?» при нехватке памяти. Печатает номер нажатой кнопки: 101 — первая,
+102 — вторая.
 """
 import ctypes, sys
 from ctypes import wintypes
@@ -29,12 +31,13 @@ class TASKDIALOGCONFIG(ctypes.Structure):
     ]
 
 podpisi = sys.argv[1:3] if len(sys.argv) >= 3 else ["Отменить", "Закрыть"]
+vopros = sys.argv[3] if len(sys.argv) >= 4 else "Закроется сам."
 buttons = (TASKDIALOG_BUTTON * 2)(TASKDIALOG_BUTTON(101, podpisi[0]), TASKDIALOG_BUTTON(102, podpisi[1]))
 cfg = TASKDIALOGCONFIG()
 cfg.cbSize = ctypes.sizeof(cfg)
 cfg.pszWindowTitle = "Действительно закрыть"
 cfg.pszMainInstruction = "Проверочный диалог помощника"
-cfg.pszContent = "Закроется сам."
+cfg.pszContent = vopros
 cfg.cButtons = 2
 cfg.pButtons = buttons
 cfg.nDefaultButton = 101

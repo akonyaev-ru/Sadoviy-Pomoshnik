@@ -1,0 +1,47 @@
+# Проверки на Windows — без выпуска.
+#
+# Зачем отдельно от выпуска. До 2026-11-01 проверки на Windows шли только при
+# теге, то есть уже по дороге к игроку. Работа переехала на Mac, а часть
+# проверок без самой Windows не идёт: окна-вопросы приложения, их текст через
+# UI Automation, замок одного запуска, `tasklist` и `netstat`. Здесь они идут
+# на каждую отправленную ветку — и ничего не публикуется.
+#
+# Шаги те же, что в выпуске до публикации: проверки, сборка, проверка
+# собранного файла. Красное здесь — не выпускать.
+
+name: Проверки
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proverki:
+    runs-on: windows-latest
+
+    steps:
+      - name: Забрать исходники
+        uses: actions/checkout@v4
+
+      - name: Поставить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Поставить зависимости
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Проверки на подделке игры
+        run: python -m pytest -q -rs
+
+      - name: Собрать
+        run: python tools/build.py
+
+      - name: Проверить собранный файл
+        shell: pwsh
+        run: python tools/check_exe.py "dist/Садовый помощник.exe"
