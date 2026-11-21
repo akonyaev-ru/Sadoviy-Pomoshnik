@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Садовый помощник
 // @namespace    si-helper
-// @version      2026.11
+// @version      2026.12
 // @description  Кнопки-помощники внутри игры. Действует только по нажатию.
 // @match        https://*.molehillempire.com/*
 // @match        https://*.sadowajaimperija.ru/*
@@ -1885,7 +1885,7 @@
 		var bar = document.createElement('div');
 		bar.id = 'si-helper';
 		// Накладка поверх полосы помощников. Сама ничего не ловит мышью
-		// (`pointer-events:none`), ловят только гномы внутри — иначе прозрачный
+		// (`pointer-events:none`), ловят только кнопки внутри — иначе прозрачный
 		// прямоугольник перехватывал бы клики по игре.
 		bar.setAttribute('style', [
 			'position:fixed', 'z-index:99999', 'pointer-events:none',
@@ -1898,6 +1898,7 @@
 			b.textContent = text;
 			b.title = title || text;
 			b.setAttribute('style', [
+				'position:absolute', 'pointer-events:auto',
 				'padding:5px 9px', 'border:1px solid rgba(0,0,0,.5)', 'border-radius:5px',
 				'background:rgba(28,38,26,.82)', 'color:#eaf6e6', 'font:inherit',
 				'font-weight:600', 'cursor:pointer', 'white-space:nowrap',
@@ -1932,7 +1933,6 @@
 
 		function gnomeButton(key, path, w, h, title, onclick) {
 			var b = document.createElement('img');
-			b.src = gfx(path);
 			b.alt = title;
 			b.title = title;
 			// Постоянная метка: подписи меняются по ходу игры, и цепляться
@@ -1956,9 +1956,16 @@
 			// Картинка игры может однажды пропасть — тогда вместо пустоты
 			// показываем обычную кнопку с подписью, а не ничего.
 			b.onerror = function () {
-				var t = gameButton(title.split(' ')[0], title, onclick);
-				if (b.parentNode) b.parentNode.replaceChild(t, b);
+				var fallback = gameButton(title.split(' ')[0], b.title, onclick);
+				fallback.setAttribute('data-si-button', key);
+				fallback.disabled = running;
+				b.fallbackButton = fallback;
+				if (b.parentNode) {
+					b.parentNode.replaceChild(fallback, b);
+					placeBar();
+				}
 			};
+			b.src = gfx(path);
 			return b;
 		}
 
@@ -2812,27 +2819,28 @@
 			return inWaterGarden() ? wgHarvestAllReady() : gameHarvestHired();
 		}
 
+		function syncGnomeButton(gnome, needed) {
+			var button = gnome.fallbackButton || gnome;
+			if (needed && !button.parentNode) {
+				button.disabled = running;
+				bar.appendChild(button);
+			} else if (!needed && button.parentNode) {
+				button.parentNode.removeChild(button);
+			}
+		}
+
 		function syncHarvestButton() {
-			var нужен = !harvestCovered();
-			var есть = !!btnHarvest.parentNode;
-			if (нужен && !есть) bar.appendChild(btnHarvest);
-			else if (!нужен && есть) btnHarvest.parentNode.removeChild(btnHarvest);
+			syncGnomeButton(btnHarvest, !harvestCovered());
 		}
 
 		// Гном почты — только тому, у кого почта есть: правило то же, что у
 		// столбика мест, источник тот же — быстрая навигация игры.
 		function syncPostButton() {
-			var нужен = !!post() && hasLocation('birds');
-			var есть = !!btnPost.parentNode;
-			if (нужен && !есть) bar.appendChild(btnPost);
-			else if (!нужен && есть) btnPost.parentNode.removeChild(btnPost);
+			syncGnomeButton(btnPost, !!post() && hasLocation('birds'));
 		}
 
 		function syncBeesButton() {
-			var нужен = !!bees() && hasLocation('bees');
-			var есть = !!btnBees.parentNode;
-			if (нужен && !есть) bar.appendChild(btnBees);
-			else if (!нужен && есть) btnBees.parentNode.removeChild(btnBees);
+			syncGnomeButton(btnBees, !!bees() && hasLocation('bees'));
 		}
 		/*
 		 * Убираем следы прежней панели, если код вставили в страницу заново.
@@ -2865,6 +2873,7 @@
 			btnPlant.title = ok
 				? ('Засеять свободные клетки: ' + seedName(pid))
 				: seedHint();
+			if (btnPlant.fallbackButton) btnPlant.fallbackButton.title = btnPlant.title;
 		}
 
 		function currentSeed() {
@@ -3245,10 +3254,17 @@
 					 * Сперва я перенёс наверх всех четверых — это было неверным
 					 * прочтением просьбы, владелец поправил.
 					 */
+					var zhuk = zhukIgry();
 					var plant = null, others = [], i;
 					for (i = 0; i < items.length; i++) {
-						if (items[i].getAttribute('data-si-button') === 'plant') plant = items[i];
-						else others.push(items[i]);
+						var item = items[i];
+						if (item === btnPlant) plant = item;
+						else if (zhuk && item === btnPlant.fallbackButton) {
+							// Появился жук игры — возвращаем прозрачную накладку поверх него.
+							item.parentNode.replaceChild(btnPlant, item);
+							btnPlant.fallbackButton = null;
+							plant = btnPlant;
+						} else others.push(item);
 					}
 
 					/*
@@ -3256,7 +3272,6 @@
 					 * ровно поверх него и в общую расстановку не идёт. Так
 					 * жук на экране один, а нажатие всё равно наше.
 					 */
-					var zhuk = zhukIgry();
 					if (plant && zhuk) {
 						var zr = zhuk.getBoundingClientRect();
 						plant.src = PROZRACHNAYA;

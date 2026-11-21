@@ -132,6 +132,38 @@ def test_panel_appears(game):
     assert game.evaluate("document.querySelectorAll('#si-helper').length") == 1
 
 
+@pytest.mark.parametrize(("label", "action_started"), [
+    ("Обойти", "/Собираю|Поливаю|Обход/.test(document.getElementById('si-helper-status').textContent)"),
+    ("Продать", "window.__city.length > 0"),
+    ("Пасека:", "window.__pasekaZaprosy.some(function(q){return q.do === 'bees_init';})"),
+], ids=["round", "sell", "bees"])
+def test_fallback_buttons_accept_mouse_clicks(server, label, action_started):
+    """Текстовые кнопки ловят клики мыши при ошибке загрузки картинок."""
+    with fresh_browser() as conn:
+        conn.inject_on_every_load(
+            "window._GFX = location.origin + '/missing-game-images/';\n" + payload.load("panel.js")
+        )
+        conn.navigate(f"{server['game']}/{STAND}")
+        selector = f"#si-helper button[title^='{label}']"
+        _wait(conn, f'!!document.querySelector("{selector}")', f"нет текстовой кнопки {label}")
+        point = conn.evaluate(f'''(function(){{
+            var button = document.querySelector("{selector}");
+            button.scrollIntoView({{block: 'center'}});
+            var rect = button.getBoundingClientRect();
+            var x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+            var hit = document.elementFromPoint(x, y);
+            return {{x: x, y: y, hits: hit === button, target: hit && (hit.id || hit.tagName)}};
+        }})()''')
+        assert point["hits"], f"мышь попадает мимо кнопки {label}: {point}"
+        # Вызов button.click() обошёл бы проверку, попадает ли мышь в кнопку.
+        for event, buttons in [("mousePressed", 1), ("mouseReleased", 0)]:
+            conn.call("Input.dispatchMouseEvent", {
+                "x": point["x"], "y": point["y"], "type": event,
+                "button": "left", "buttons": buttons, "clickCount": 1,
+            })
+        _wait(conn, action_started, f"клик по кнопке {label} не запустил действие ({_status(conn)})", timeout=4)
+
+
 def test_stand_is_honest(game):
     """Сам стенд считает свой сад так же, как мы ожидаем."""
     assert game.evaluate("EXPECTED.length") == EXPECTED_COUNT
