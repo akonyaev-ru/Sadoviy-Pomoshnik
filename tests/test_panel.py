@@ -140,6 +140,10 @@ def test_panel_appears(game):
 def test_fallback_buttons_accept_mouse_clicks(server, label, action_started):
     """Текстовые кнопки ловят клики мыши при ошибке загрузки картинок."""
     with fresh_browser() as conn:
+        # Нижняя полоса сада должна попадать в видимую область и на Windows CI.
+        conn.call("Emulation.setDeviceMetricsOverride", {
+            "width": 1024, "height": 768, "deviceScaleFactor": 1, "mobile": False,
+        })
         conn.inject_on_every_load(
             "window._GFX = location.origin + '/missing-game-images/';\n" + payload.load("panel.js")
         )
@@ -148,7 +152,6 @@ def test_fallback_buttons_accept_mouse_clicks(server, label, action_started):
         _wait(conn, f'!!document.querySelector("{selector}")', f"нет текстовой кнопки {label}")
         point = conn.evaluate(f'''(function(){{
             var button = document.querySelector("{selector}");
-            button.scrollIntoView({{block: 'center'}});
             var rect = button.getBoundingClientRect();
             var x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
             var hit = document.elementFromPoint(x, y);
